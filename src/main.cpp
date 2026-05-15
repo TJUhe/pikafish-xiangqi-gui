@@ -25,10 +25,13 @@ constexpr int kSideMargin = 48;
 constexpr int kPieceRadius = 24;
 constexpr int kRestartButtonId = 1001;
 constexpr int kEngineComboId = 1002;
+constexpr int kResignButtonId = 1003;
+constexpr int kHintButtonId = 1004;
 constexpr int kSearchDepth = 4;
 constexpr int kWinScore = 1'000'000;
 constexpr UINT kAiMoveMsg = WM_APP + 1;
 constexpr UINT kAiMoveReadyMsg = WM_APP + 2;
+constexpr UINT kHintReadyMsg = WM_APP + 3;
 constexpr DWORD kEngineThinkTimeMs = 500;
 
 enum class Side {
@@ -75,13 +78,17 @@ using Board = std::array<std::array<Cell, kCols>, kRows>;
 Board g_board{};
 HWND g_restartButton = nullptr;
 HWND g_engineCombo = nullptr;
+HWND g_resignButton = nullptr;
+HWND g_hintButton = nullptr;
 Side g_turn = Side::Red;
 bool g_gameOver = false;
 bool g_aiPending = false;
 bool g_aiThinking = false;
+bool g_hintThinking = false;
 std::optional<Position> g_selected;
 std::optional<Position> g_lastMoveFrom;
 std::optional<Position> g_lastMoveTo;
+std::optional<Move> g_hintMove;
 std::wstring g_status = L"你执红方，点击棋子开始。";
 std::vector<Move> g_gameMoves;
 bool g_engineAvailable = false;
@@ -407,9 +414,11 @@ void ResetGame(HWND hwnd) {
     g_gameOver = false;
     g_aiPending = false;
     g_aiThinking = false;
+    g_hintThinking = false;
     g_selected.reset();
     g_lastMoveFrom.reset();
     g_lastMoveTo.reset();
+    g_hintMove.reset();
     g_gameMoves.clear();
     g_status = L"你执红方。当前引擎：" + EngineDisplayName(g_selectedEngine);
     SetWindowTextW(hwnd, L"中国象棋 - 轮到你");
@@ -889,16 +898,51 @@ std::optional<Move> ChooseFallbackMove(Board& board) {
     return bestMove;
 }
 
-AiResult ComputeAiMove(Board board, std::vector<Move> history, EngineKind engineKind) {
+std::optional<Move> ChooseFallbackMoveForSide(Board& board, Side side) {
+    if (side == Side::Black) {
+        return ChooseFallbackMove(board);
+    }
+
+    std::vector<Move> moves = GenerateStrictLegalMoves(board, Side::Red);
+    if (moves.empty()) {
+        return std::nullopt;
+    }
+
+    OrderMoves(board, moves);
+    int bestScore = std::numeric_limits<int>::max() / 2;
+    Move bestMove = moves.front();
+    int alpha = std::numeric_limits<int>::min() / 2;
+    const int beta = std::numeric_limits<int>::max() / 2;
+
+    for (const Move& move : moves) {
+        const Cell captured = MakeMove(board, move);
+        const int score = AlphaBeta(board, kSearchDepth - 1, alpha, beta, Side::Black);
+        UndoMove(board, move, captured);
+
+        if (score < bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+    }
+
+    return bestMove;
+}
+
+AiResult ComputeEngineMoveForSide(Board board, std::vector<Move> history, EngineKind engineKind,
+                                  Side side) {
     EngineResult engineResult = QueryEngineMove(engineKind, history);
     std::optional<Move> move = engineResult.move;
-    if (move && !IsLegalMove(board, *move, Side::Black)) {
+    if (move && !IsLegalMove(board, *move, side)) {
         move.reset();
     }
     if (!move) {
-        move = ChooseFallbackMove(board);
+        move = ChooseFallbackMoveForSide(board, side);
     }
     return {move, engineResult.engineFound, engineKind};
+}
+
+AiResult ComputeAiMove(Board board, std::vector<Move> history, EngineKind engineKind) {
+    return ComputeEngineMoveForSide(board, history, engineKind, Side::Black);
 }
 
 void StartAiThread(HWND hwnd) {
@@ -918,6 +962,26 @@ void StartAiThread(HWND hwnd) {
     std::thread([hwnd, boardSnapshot, historySnapshot, engineSnapshot] {
         auto* result = new AiResult(ComputeAiMove(boardSnapshot, historySnapshot, engineSnapshot));
         PostMessageW(hwnd, kAiMoveReadyMsg, 0, reinterpret_cast<LPARAM>(result));
+    }).detach();
+}
+
+void StartHintThread(HWND hwnd) {
+    if (g_hintThinking || g_aiThinking || g_aiPending || g_gameOver || g_turn != Side::Red) {
+        return;
+    }
+
+    g_hintThinking = true;
+    g_hintMove.reset();
+    const Board boardSnapshot = g_board;
+    const std::vector<Move> historySnapshot = g_gameMoves;
+    const EngineKind engineSnapshot = g_selectedEngine;
+    g_status = L"正在生成提示：" + EngineDisplayName(engineSnapshot);
+    InvalidateRect(hwnd, nullptr, TRUE);
+
+    std::thread([hwnd, boardSnapshot, historySnapshot, engineSnapshot] {
+        auto* result = new AiResult(
+            ComputeEngineMoveForSide(boardSnapshot, historySnapshot, engineSnapshot, Side::Red));
+        PostMessageW(hwnd, kHintReadyMsg, 0, reinterpret_cast<LPARAM>(result));
     }).detach();
 }
 
@@ -997,6 +1061,31 @@ void ApplyAiResult(HWND hwnd, AiResult* result) {
     delete result;
 }
 
+void ApplyHintResult(HWND hwnd, AiResult* result) {
+    g_hintThinking = false;
+    if (!result) {
+        return;
+    }
+
+    std::optional<Move> move = result->move;
+    if (move && !IsLegalMove(g_board, *move, Side::Red)) {
+        move.reset();
+    }
+
+    if (move) {
+        g_hintMove = move;
+        g_selected = move->from;
+        g_status = result->engineFound ? (EngineDisplayName(result->engineKind) + L" 建议已标出。")
+                                       : L"未找到所选引擎，已用内置搜索给出提示。";
+    } else {
+        g_hintMove.reset();
+        g_status = L"当前没有可用提示。";
+    }
+
+    delete result;
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
 bool ScreenToPosition(const Layout& layout, int px, int py, Position& pos) {
     const int minX = layout.left - layout.cell / 2;
     const int minY = layout.top - layout.cell / 2;
@@ -1072,8 +1161,8 @@ void PaintWindow(HWND hwnd, HDC hdc) {
     TextOutW(hdc, 24, 18, L"中国象棋", 4);
     SelectObject(hdc, infoFont);
     TextOutW(hdc, 24, 58, g_status.c_str(), static_cast<int>(g_status.size()));
-    const wchar_t* engineLabel = L"电脑引擎";
-    TextOutW(hdc, 520, 34, engineLabel, static_cast<int>(lstrlenW(engineLabel)));
+    const wchar_t* engineLabel = L"引擎";
+    TextOutW(hdc, 438, 34, engineLabel, static_cast<int>(lstrlenW(engineLabel)));
 
     HPEN gridPen = CreatePen(PS_SOLID, 2, RGB(102, 57, 24));
     HGDIOBJ oldPen = SelectObject(hdc, gridPen);
@@ -1118,6 +1207,20 @@ void PaintWindow(HWND hwnd, HDC hdc) {
                   p.x + kPieceRadius + 4, p.y + kPieceRadius + 4);
         SelectObject(hdc, oldMark);
         DeleteObject(markPen);
+    }
+
+    if (g_hintMove) {
+        HPEN hintPen = CreatePen(PS_SOLID, 3, RGB(25, 100, 215));
+        HGDIOBJ oldHint = SelectObject(hdc, hintPen);
+        SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+        const POINT from = BoardPoint(layout, g_hintMove->from);
+        const POINT to = BoardPoint(layout, g_hintMove->to);
+        Rectangle(hdc, from.x - kPieceRadius - 7, from.y - kPieceRadius - 7,
+                  from.x + kPieceRadius + 7, from.y + kPieceRadius + 7);
+        Rectangle(hdc, to.x - kPieceRadius - 7, to.y - kPieceRadius - 7,
+                  to.x + kPieceRadius + 7, to.y + kPieceRadius + 7);
+        SelectObject(hdc, oldHint);
+        DeleteObject(hintPen);
     }
 
     for (int row = 0; row < kRows; ++row) {
@@ -1165,6 +1268,7 @@ void HandleClick(HWND hwnd, int x, int y) {
     if (clickedCell && clickedCell->side == Side::Red) {
         g_selected = clicked;
         g_status = L"已切换选中棋子。";
+        g_hintMove.reset();
         InvalidateRect(hwnd, nullptr, TRUE);
         return;
     }
@@ -1177,6 +1281,7 @@ void HandleClick(HWND hwnd, int x, int y) {
     }
 
     if (ApplyMove(hwnd, move) && !g_gameOver) {
+        g_hintMove.reset();
         PostMessageW(hwnd, kAiMoveMsg, 0, 0);
     }
 }
@@ -1186,12 +1291,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_CREATE:
         InitCommonControls();
         g_restartButton = CreateWindowW(
-            L"BUTTON", L"重新开始", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 712, 28, 112, 34,
+            L"BUTTON", L"重新开始", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 736, 28, 92, 34,
             hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRestartButtonId)),
+            reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
+        g_resignButton = CreateWindowW(
+            L"BUTTON", L"认输", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 670, 28, 58, 34,
+            hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kResignButtonId)),
+            reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
+        g_hintButton = CreateWindowW(
+            L"BUTTON", L"提示", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 604, 28, 58, 34,
+            hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kHintButtonId)),
             reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
         g_engineCombo = CreateWindowW(
             WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-            600, 28, 104, 180, hwnd,
+            480, 28, 116, 180, hwnd,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEngineComboId)),
             reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
         if (g_engineCombo) {
@@ -1205,15 +1318,32 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_SIZE:
         if (g_restartButton) {
-            MoveWindow(g_restartButton, LOWORD(lParam) - 136, 24, 112, 34, TRUE);
+            MoveWindow(g_restartButton, LOWORD(lParam) - 116, 24, 92, 34, TRUE);
+        }
+        if (g_resignButton) {
+            MoveWindow(g_resignButton, LOWORD(lParam) - 182, 24, 58, 34, TRUE);
+        }
+        if (g_hintButton) {
+            MoveWindow(g_hintButton, LOWORD(lParam) - 248, 24, 58, 34, TRUE);
         }
         if (g_engineCombo) {
-            MoveWindow(g_engineCombo, LOWORD(lParam) - 260, 28, 112, 180, TRUE);
+            MoveWindow(g_engineCombo, LOWORD(lParam) - 380, 28, 124, 180, TRUE);
         }
         return 0;
     case WM_COMMAND:
         if (LOWORD(wParam) == kRestartButtonId) {
             ResetGame(hwnd);
+        } else if (LOWORD(wParam) == kResignButtonId) {
+            if (!g_gameOver && !g_aiThinking && !g_hintThinking) {
+                g_gameOver = true;
+                g_selected.reset();
+                g_hintMove.reset();
+                g_status = L"你已认输，电脑获胜。";
+                SetWindowTextW(hwnd, L"中国象棋 - 电脑获胜");
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+        } else if (LOWORD(wParam) == kHintButtonId) {
+            StartHintThread(hwnd);
         } else if (LOWORD(wParam) == kEngineComboId && HIWORD(wParam) == CBN_SELCHANGE) {
             const LRESULT selection = SendMessageW(g_engineCombo, CB_GETCURSEL, 0, 0);
             if (selection >= 0 && selection < static_cast<LRESULT>(kEngines.size())) {
@@ -1234,6 +1364,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case kAiMoveReadyMsg:
         ApplyAiResult(hwnd, reinterpret_cast<AiResult*>(lParam));
+        return 0;
+    case kHintReadyMsg:
+        ApplyHintResult(hwnd, reinterpret_cast<AiResult*>(lParam));
         return 0;
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
