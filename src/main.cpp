@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <windowsx.h>
+#include <commctrl.h>
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,7 @@ constexpr int kTopBand = 96;
 constexpr int kSideMargin = 48;
 constexpr int kPieceRadius = 24;
 constexpr int kRestartButtonId = 1001;
+constexpr int kEngineComboId = 1002;
 constexpr int kSearchDepth = 4;
 constexpr int kWinScore = 1'000'000;
 constexpr UINT kAiMoveMsg = WM_APP + 1;
@@ -72,6 +74,7 @@ using Board = std::array<std::array<Cell, kCols>, kRows>;
 
 Board g_board{};
 HWND g_restartButton = nullptr;
+HWND g_engineCombo = nullptr;
 Side g_turn = Side::Red;
 bool g_gameOver = false;
 bool g_aiPending = false;
@@ -83,7 +86,37 @@ std::wstring g_status = L"你执红方，点击棋子开始。";
 std::vector<Move> g_gameMoves;
 bool g_engineAvailable = false;
 
+enum class EngineKind {
+    Pikafish = 0,
+    FairyStockfish = 1,
+    FairyStockfishNnue = 2
+};
+
+struct EngineConfig {
+    EngineKind kind;
+    const wchar_t* displayName;
+    const wchar_t* directoryName;
+    const wchar_t* keyword;
+    const wchar_t* evalFile;
+};
+
+constexpr std::array<EngineConfig, 3> kEngines{{
+    {EngineKind::Pikafish, L"Pikafish", L"pikafish", L"pikafish", L"pikafish.nnue"},
+    {EngineKind::FairyStockfish, L"Fairy-Stockfish", L"fairy-stockfish", L"fairy", L""},
+    {EngineKind::FairyStockfishNnue, L"Fairy-Stockfish-NNUE", L"fairy-stockfish-nnue", L"fairy", L""},
+}};
+
+EngineKind g_selectedEngine = EngineKind::Pikafish;
+
 bool CrossedRiver(Position p, Side side);
+
+const EngineConfig& ConfigFor(EngineKind kind) {
+    return kEngines[static_cast<std::size_t>(kind)];
+}
+
+std::wstring EngineDisplayName(EngineKind kind) {
+    return ConfigFor(kind).displayName;
+}
 
 std::string WideToUtf8(const std::wstring& text) {
     if (text.empty()) {
@@ -373,8 +406,7 @@ void ResetGame(HWND hwnd) {
     g_lastMoveFrom.reset();
     g_lastMoveTo.reset();
     g_gameMoves.clear();
-    g_status = g_engineAvailable ? L"你执红方。强引擎 Pikafish 已启用。"
-                                 : L"你执红方。未找到 Pikafish，使用内置弱搜索。";
+    g_status = L"你执红方。当前引擎：" + EngineDisplayName(g_selectedEngine);
     SetWindowTextW(hwnd, L"中国象棋 - 轮到你");
     InvalidateRect(hwnd, nullptr, TRUE);
 }
@@ -573,24 +605,28 @@ std::optional<Move> MoveFromUci(const std::string& text) {
     return move;
 }
 
-std::wstring FindPikafishExecutable() {
+std::wstring FindEngineExecutable(EngineKind engineKind) {
+    const EngineConfig& config = ConfigFor(engineKind);
+    const std::wstring engineDir = config.directoryName;
     const std::vector<std::wstring> directories{
-        L".\\engines\\pikafish",
-        L".\\engines\\pikafish\\Windows",
-        GetExecutableDirectory() + L"\\engines\\pikafish",
-        GetExecutableDirectory() + L"\\engines\\pikafish\\Windows",
-        GetExecutableDirectory() + L"\\..\\..\\..\\engines\\pikafish",
-        GetExecutableDirectory() + L"\\..\\..\\..\\engines\\pikafish\\Windows",
+        L".\\engines\\" + engineDir,
+        L".\\engines\\" + engineDir + L"\\Windows",
+        GetExecutableDirectory() + L"\\engines\\" + engineDir,
+        GetExecutableDirectory() + L"\\engines\\" + engineDir + L"\\Windows",
+        GetExecutableDirectory() + L"\\..\\..\\..\\engines\\" + engineDir,
+        GetExecutableDirectory() + L"\\..\\..\\..\\engines\\" + engineDir + L"\\Windows",
     };
 
     for (const std::wstring& directory : directories) {
-        const std::array<std::wstring, 6> preferredNames{
-            L"pikafish-avx2.exe",
-            L"pikafish-bmi2.exe",
-            L"pikafish-avxvnni.exe",
-            L"pikafish-sse41-popcnt.exe",
-            L"pikafish.exe",
-            L"pikafish-modern.exe",
+        const std::vector<std::wstring> preferredNames{
+            std::wstring(config.keyword) + L"-avx2.exe",
+            std::wstring(config.keyword) + L"-bmi2.exe",
+            std::wstring(config.keyword) + L"-avxvnni.exe",
+            std::wstring(config.keyword) + L"-sse41-popcnt.exe",
+            std::wstring(config.keyword) + L".exe",
+            std::wstring(config.keyword) + L"-modern.exe",
+            L"stockfish.exe",
+            L"fairy-stockfish.exe",
         };
         for (const std::wstring& name : preferredNames) {
             const std::wstring path = directory + L"\\" + name;
@@ -612,7 +648,8 @@ std::wstring FindPikafishExecutable() {
                 std::transform(lower.begin(), lower.end(), lower.begin(), [](wchar_t ch) {
                     return static_cast<wchar_t>(towlower(ch));
                 });
-                if (lower.find(L"pikafish") != std::wstring::npos) {
+                if (lower.find(config.keyword) != std::wstring::npos ||
+                    lower.find(L"stockfish") != std::wstring::npos) {
                     FindClose(find);
                     return directory + L"\\" + name;
                 }
@@ -632,10 +669,11 @@ struct EngineResult {
 struct AiResult {
     std::optional<Move> move;
     bool engineFound = false;
+    EngineKind engineKind = EngineKind::Pikafish;
 };
 
-EngineResult QueryPikafishMove(const std::vector<Move>& history) {
-    const std::wstring enginePath = FindPikafishExecutable();
+EngineResult QueryEngineMove(EngineKind engineKind, const std::vector<Move>& history) {
+    const std::wstring enginePath = FindEngineExecutable(engineKind);
     if (enginePath.empty()) {
         return {};
     }
@@ -679,6 +717,14 @@ EngineResult QueryPikafishMove(const std::vector<Move>& history) {
 
     std::ostringstream commands;
     commands << "uci\n";
+    const EngineConfig& config = ConfigFor(engineKind);
+    if (engineKind == EngineKind::FairyStockfish ||
+        engineKind == EngineKind::FairyStockfishNnue) {
+        commands << "setoption name UCI_Variant value xiangqi\n";
+    }
+    if (config.evalFile[0] != L'\0') {
+        commands << "setoption name EvalFile value " << WideToUtf8(config.evalFile) << "\n";
+    }
     commands << "isready\n";
     commands << "position startpos";
     if (!history.empty()) {
@@ -837,8 +883,8 @@ std::optional<Move> ChooseFallbackMove(Board& board) {
     return bestMove;
 }
 
-AiResult ComputeAiMove(Board board, std::vector<Move> history) {
-    EngineResult engineResult = QueryPikafishMove(history);
+AiResult ComputeAiMove(Board board, std::vector<Move> history, EngineKind engineKind) {
+    EngineResult engineResult = QueryEngineMove(engineKind, history);
     std::optional<Move> move = engineResult.move;
     if (move && !IsLegalMove(board, *move, Side::Black)) {
         move.reset();
@@ -846,7 +892,7 @@ AiResult ComputeAiMove(Board board, std::vector<Move> history) {
     if (!move) {
         move = ChooseFallbackMove(board);
     }
-    return {move, engineResult.engineFound};
+    return {move, engineResult.engineFound, engineKind};
 }
 
 void StartAiThread(HWND hwnd) {
@@ -858,12 +904,13 @@ void StartAiThread(HWND hwnd) {
     g_aiPending = true;
     const Board boardSnapshot = g_board;
     const std::vector<Move> historySnapshot = g_gameMoves;
-    g_status = L"电脑思考中...";
+    const EngineKind engineSnapshot = g_selectedEngine;
+    g_status = L"电脑思考中：" + EngineDisplayName(engineSnapshot);
     SetWindowTextW(hwnd, L"中国象棋 - 电脑思考中");
     InvalidateRect(hwnd, nullptr, TRUE);
 
-    std::thread([hwnd, boardSnapshot, historySnapshot] {
-        auto* result = new AiResult(ComputeAiMove(boardSnapshot, historySnapshot));
+    std::thread([hwnd, boardSnapshot, historySnapshot, engineSnapshot] {
+        auto* result = new AiResult(ComputeAiMove(boardSnapshot, historySnapshot, engineSnapshot));
         PostMessageW(hwnd, kAiMoveReadyMsg, 0, reinterpret_cast<LPARAM>(result));
     }).detach();
 }
@@ -916,6 +963,7 @@ void ApplyAiResult(HWND hwnd, AiResult* result) {
     }
 
     g_engineAvailable = result->engineFound;
+    const EngineKind usedEngine = result->engineKind;
     std::optional<Move> move = result->move;
     if (move && !IsLegalMove(g_board, *move, Side::Black)) {
         move.reset();
@@ -934,6 +982,12 @@ void ApplyAiResult(HWND hwnd, AiResult* result) {
     }
 
     ApplyMove(hwnd, *move);
+    if (!g_gameOver) {
+        g_status = result->engineFound ? (EngineDisplayName(usedEngine) + L" 已落子。轮到你。")
+                                       : (EngineDisplayName(usedEngine) +
+                                          L" 未找到，已用内置搜索。轮到你。");
+        InvalidateRect(hwnd, nullptr, TRUE);
+    }
     delete result;
 }
 
@@ -1012,6 +1066,8 @@ void PaintWindow(HWND hwnd, HDC hdc) {
     TextOutW(hdc, 24, 18, L"中国象棋", 4);
     SelectObject(hdc, infoFont);
     TextOutW(hdc, 24, 58, g_status.c_str(), static_cast<int>(g_status.size()));
+    const wchar_t* engineLabel = L"电脑引擎";
+    TextOutW(hdc, 520, 34, engineLabel, static_cast<int>(lstrlenW(engineLabel)));
 
     HPEN gridPen = CreatePen(PS_SOLID, 2, RGB(102, 57, 24));
     HGDIOBJ oldPen = SelectObject(hdc, gridPen);
@@ -1122,20 +1178,46 @@ void HandleClick(HWND hwnd, int x, int y) {
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE:
+        InitCommonControls();
         g_restartButton = CreateWindowW(
             L"BUTTON", L"重新开始", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 712, 28, 112, 34,
             hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRestartButtonId)),
             reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
+        g_engineCombo = CreateWindowW(
+            WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+            600, 28, 104, 180, hwnd,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEngineComboId)),
+            reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
+        if (g_engineCombo) {
+            for (const EngineConfig& engine : kEngines) {
+                SendMessageW(g_engineCombo, CB_ADDSTRING, 0,
+                             reinterpret_cast<LPARAM>(engine.displayName));
+            }
+            SendMessageW(g_engineCombo, CB_SETCURSEL, static_cast<WPARAM>(g_selectedEngine), 0);
+        }
         ResetGame(hwnd);
         return 0;
     case WM_SIZE:
         if (g_restartButton) {
             MoveWindow(g_restartButton, LOWORD(lParam) - 136, 24, 112, 34, TRUE);
         }
+        if (g_engineCombo) {
+            MoveWindow(g_engineCombo, LOWORD(lParam) - 260, 28, 112, 180, TRUE);
+        }
         return 0;
     case WM_COMMAND:
         if (LOWORD(wParam) == kRestartButtonId) {
             ResetGame(hwnd);
+        } else if (LOWORD(wParam) == kEngineComboId && HIWORD(wParam) == CBN_SELCHANGE) {
+            const LRESULT selection = SendMessageW(g_engineCombo, CB_GETCURSEL, 0, 0);
+            if (selection >= 0 && selection < static_cast<LRESULT>(kEngines.size())) {
+                g_selectedEngine = static_cast<EngineKind>(selection);
+                if (!g_aiThinking && !g_aiPending && !g_gameOver) {
+                    g_status = L"当前引擎：" + EngineDisplayName(g_selectedEngine) +
+                               L"。下一步电脑生效。";
+                    InvalidateRect(hwnd, nullptr, TRUE);
+                }
+            }
         }
         return 0;
     case WM_LBUTTONUP:

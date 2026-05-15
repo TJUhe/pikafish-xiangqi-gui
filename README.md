@@ -40,7 +40,13 @@ cmake --build build
 
 ## 强引擎
 
-程序会优先调用 Pikafish。Pikafish 是强 UCI 中国象棋引擎，负责电脑走棋；本程序负责界面、点击和裁判逻辑。
+程序支持在界面右上角选择电脑引擎。每一步电脑思考前都会读取当前下拉框选择，因此一局中途也可以切换引擎，下一步立即生效。
+
+目前内置三个引擎选项：
+
+- Pikafish
+- Fairy-Stockfish
+- Fairy-Stockfish-NNUE
 
 安装方式：
 
@@ -48,17 +54,19 @@ cmake --build build
 .\install_pikafish.ps1
 ```
 
-如果 GitHub 下载临时失败，也可以手动下载 Pikafish 发布包并解压到：
+如果 GitHub 下载临时失败，也可以手动下载对应发布包并解压到：
 
 ```text
-xiangqi\engines\pikafish
+pikafish-xiangqi-gui\engines\pikafish
+pikafish-xiangqi-gui\engines\fairy-stockfish
+pikafish-xiangqi-gui\engines\fairy-stockfish-nnue
 ```
 
-程序会自动查找其中名字包含 `pikafish` 的 `.exe`。
+程序会自动查找这些目录或其 `Windows` 子目录里的 `.exe`。
 
-如果没有找到 Pikafish，程序会退回内置 alpha-beta 搜索，但棋力会明显弱很多。
+如果当前下拉框选中的引擎没有找到，程序会退回内置 alpha-beta 搜索，但棋力会明显弱很多。
 
-当前 Pikafish 每步思考时间默认是 `500ms`，并在后台线程运行，所以电脑思考时窗口不会卡住。可以在 `src/main.cpp` 里修改 `kEngineThinkTimeMs` 调整棋力和等待时间。
+当前外部引擎每步思考时间默认是 `500ms`，并在后台线程运行，所以电脑思考时窗口不会卡住。可以在 `src/main.cpp` 里修改 `kEngineThinkTimeMs` 调整棋力和等待时间。
 
 ## 裁判逻辑
 

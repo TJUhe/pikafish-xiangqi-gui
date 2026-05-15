@@ -6,4 +6,4 @@ else()
     target_compile_options(xiangqi PRIVATE -Wall -Wextra -pedantic)
 endif()
 
-target_link_libraries(xiangqi PRIVATE user32 gdi32)
+target_link_libraries(xiangqi PRIVATE user32 gdi32 comctl32)
