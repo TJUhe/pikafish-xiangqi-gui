@@ -42,6 +42,8 @@ if(EXISTS "${ENGINE_SOURCE_DIR}")
                     PATTERN "*.exe"
                     PATTERN "*.dll"
                     PATTERN "*.ini"
+                    PATTERN "*.DAT"
+                    PATTERN "*.dat"
                     PATTERN "*.nnue")
         endif()
     endforeach()

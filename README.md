@@ -89,6 +89,14 @@ dist\pikafish-xiangqi-gui-windows-x64.zip
 - ElephantArt
 - PX0
 
+当前仓库已随附并验证可用的外部引擎：
+
+- Pikafish
+- Fairy-Stockfish
+- ElephantEye
+
+ElephantArt 是预 alpha/归档项目，并且需要额外权重文件；当前仅保留接口槽位，不随发布包启用。
+
 安装方式：
 
 ```powershell

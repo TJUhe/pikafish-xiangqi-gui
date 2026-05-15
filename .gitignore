@@ -1,6 +1,7 @@
 build/
 build-release/
 dist/
+third_party/
 engines/*
 !engines/pikafish/
 engines/pikafish/*
@@ -15,6 +16,12 @@ engines/fairy-stockfish/*
 !engines/fairy-stockfish-nnue/
 engines/fairy-stockfish-nnue/*
 !engines/fairy-stockfish-nnue/*.exe
+!engines/eleeye/
+engines/eleeye/*
+!engines/eleeye/*.EXE
+!engines/eleeye/*.exe
+!engines/eleeye/*.DAT
+!engines/eleeye/*.dat
 engines/**/*.7z
 *.obj
 *.pdb
