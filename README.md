@@ -19,6 +19,37 @@ cmake -S . -B build
 cmake --build build
 ```
 
+## Release 打包
+
+生成可拷贝到其他 Windows 电脑直接运行的发布目录和 zip：
+
+```powershell
+.\package_release.ps1
+```
+
+输出位置：
+
+```text
+dist\pikafish-xiangqi-gui
+dist\pikafish-xiangqi-gui-windows-x64.zip
+```
+
+发布包会包含：
+
+- `xiangqi.exe`
+- 三个外部引擎的 Windows 可执行文件
+- Pikafish 所需的 `pikafish.nnue`
+- Fairy-Stockfish 所需的 `variants.ini`
+- README 和诊断脚本
+
+可以在发布目录里运行：
+
+```powershell
+.\check_engines.ps1
+```
+
+如果三个引擎都输出 `bestmove`，说明这台电脑可以直接运行。
+
 ## 运行
 
 ```powershell
