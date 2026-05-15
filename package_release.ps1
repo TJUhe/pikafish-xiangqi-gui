@@ -12,7 +12,20 @@ if (Test-Path $PackageDir) {
 
 cmake -S $Root -B $BuildDir -DCMAKE_BUILD_TYPE=Release
 cmake --build $BuildDir --config Release
+if ($LASTEXITCODE -ne 0) {
+    throw "Release build failed."
+}
 cmake --install $BuildDir --config Release --prefix $PackageDir
+if ($LASTEXITCODE -ne 0) {
+    throw "CMake install failed."
+}
+
+Push-Location $PackageDir
+try {
+    .\check_engines.ps1 -FailOnInstalledError
+} finally {
+    Pop-Location
+}
 
 if (Test-Path $ZipPath) {
     Remove-Item -LiteralPath $ZipPath -Force

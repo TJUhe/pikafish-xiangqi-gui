@@ -132,8 +132,10 @@ constexpr std::array<EngineConfig, 6> kEngines{{
 }};
 
 EngineKind g_selectedEngine = EngineKind::Pikafish;
+std::vector<EngineKind> g_visibleEngines;
 
 bool CrossedRiver(Position p, Side side);
+std::optional<EngineExecutable> FindEngineExecutable(EngineKind engineKind);
 
 const EngineConfig& ConfigFor(EngineKind kind) {
     for (const EngineConfig& engine : kEngines) {
@@ -146,6 +148,10 @@ const EngineConfig& ConfigFor(EngineKind kind) {
 
 std::wstring EngineDisplayName(EngineKind kind) {
     return ConfigFor(kind).displayName;
+}
+
+bool EngineIsAvailable(EngineKind kind) {
+    return ConfigFor(kind).protocol == EngineProtocol::BuiltIn || FindEngineExecutable(kind).has_value();
 }
 
 std::string WideToUtf8(const std::wstring& text) {
@@ -1358,11 +1364,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEngineComboId)),
             reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
         if (g_engineCombo) {
+            g_visibleEngines.clear();
             for (const EngineConfig& engine : kEngines) {
+                if (!EngineIsAvailable(engine.kind)) {
+                    continue;
+                }
+                g_visibleEngines.push_back(engine.kind);
                 SendMessageW(g_engineCombo, CB_ADDSTRING, 0,
                              reinterpret_cast<LPARAM>(engine.displayName));
             }
-            SendMessageW(g_engineCombo, CB_SETCURSEL, static_cast<WPARAM>(g_selectedEngine), 0);
+            if (g_visibleEngines.empty()) {
+                g_visibleEngines.push_back(EngineKind::BuiltIn);
+                SendMessageW(g_engineCombo, CB_ADDSTRING, 0,
+                             reinterpret_cast<LPARAM>(ConfigFor(EngineKind::BuiltIn).displayName));
+            }
+            const auto selected = std::find(g_visibleEngines.begin(), g_visibleEngines.end(), g_selectedEngine);
+            const int selectedIndex = selected == g_visibleEngines.end()
+                                          ? 0
+                                          : static_cast<int>(selected - g_visibleEngines.begin());
+            g_selectedEngine = g_visibleEngines[static_cast<std::size_t>(selectedIndex)];
+            SendMessageW(g_engineCombo, CB_SETCURSEL, static_cast<WPARAM>(selectedIndex), 0);
         }
         ResetGame(hwnd);
         return 0;
@@ -1396,8 +1417,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             StartHintThread(hwnd);
         } else if (LOWORD(wParam) == kEngineComboId && HIWORD(wParam) == CBN_SELCHANGE) {
             const LRESULT selection = SendMessageW(g_engineCombo, CB_GETCURSEL, 0, 0);
-            if (selection >= 0 && selection < static_cast<LRESULT>(kEngines.size())) {
-                g_selectedEngine = static_cast<EngineKind>(selection);
+            if (selection >= 0 && selection < static_cast<LRESULT>(g_visibleEngines.size())) {
+                g_selectedEngine = g_visibleEngines[static_cast<std::size_t>(selection)];
                 if (!g_aiThinking && !g_aiPending && !g_gameOver) {
                     g_status = L"当前引擎：" + EngineDisplayName(g_selectedEngine) +
                                L"。下一步电脑生效。";
