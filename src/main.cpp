@@ -100,6 +100,11 @@ struct EngineConfig {
     const wchar_t* evalFile;
 };
 
+struct EngineExecutable {
+    std::wstring exePath;
+    std::wstring workingDirectory;
+};
+
 constexpr std::array<EngineConfig, 3> kEngines{{
     {EngineKind::Pikafish, L"Pikafish", L"pikafish", L"pikafish", L"pikafish.nnue"},
     {EngineKind::FairyStockfish, L"Fairy-Stockfish", L"fairy-stockfish", L"fairy", L""},
@@ -605,19 +610,17 @@ std::optional<Move> MoveFromUci(const std::string& text) {
     return move;
 }
 
-std::wstring FindEngineExecutable(EngineKind engineKind) {
+std::optional<EngineExecutable> FindEngineExecutable(EngineKind engineKind) {
     const EngineConfig& config = ConfigFor(engineKind);
     const std::wstring engineDir = config.directoryName;
-    const std::vector<std::wstring> directories{
+    const std::vector<std::wstring> roots{
         L".\\engines\\" + engineDir,
-        L".\\engines\\" + engineDir + L"\\Windows",
         GetExecutableDirectory() + L"\\engines\\" + engineDir,
-        GetExecutableDirectory() + L"\\engines\\" + engineDir + L"\\Windows",
         GetExecutableDirectory() + L"\\..\\..\\..\\engines\\" + engineDir,
-        GetExecutableDirectory() + L"\\..\\..\\..\\engines\\" + engineDir + L"\\Windows",
     };
 
-    for (const std::wstring& directory : directories) {
+    for (const std::wstring& root : roots) {
+        const std::vector<std::wstring> directories{root, root + L"\\Windows", root + L"\\bin"};
         const std::vector<std::wstring> preferredNames{
             std::wstring(config.keyword) + L"-avx2.exe",
             std::wstring(config.keyword) + L"-bmi2.exe",
@@ -628,37 +631,40 @@ std::wstring FindEngineExecutable(EngineKind engineKind) {
             L"stockfish.exe",
             L"fairy-stockfish.exe",
         };
-        for (const std::wstring& name : preferredNames) {
-            const std::wstring path = directory + L"\\" + name;
-            if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                return path;
-            }
-        }
 
-        WIN32_FIND_DATAW data{};
-        HANDLE find = FindFirstFileW((directory + L"\\*.exe").c_str(), &data);
-        if (find == INVALID_HANDLE_VALUE) {
-            continue;
-        }
-
-        do {
-            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-                std::wstring name = data.cFileName;
-                std::wstring lower = name;
-                std::transform(lower.begin(), lower.end(), lower.begin(), [](wchar_t ch) {
-                    return static_cast<wchar_t>(towlower(ch));
-                });
-                if (lower.find(config.keyword) != std::wstring::npos ||
-                    lower.find(L"stockfish") != std::wstring::npos) {
-                    FindClose(find);
-                    return directory + L"\\" + name;
+        for (const std::wstring& directory : directories) {
+            for (const std::wstring& name : preferredNames) {
+                const std::wstring path = directory + L"\\" + name;
+                if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                    return EngineExecutable{path, root};
                 }
             }
-        } while (FindNextFileW(find, &data));
-        FindClose(find);
+
+            WIN32_FIND_DATAW data{};
+            HANDLE find = FindFirstFileW((directory + L"\\*.exe").c_str(), &data);
+            if (find == INVALID_HANDLE_VALUE) {
+                continue;
+            }
+
+            do {
+                if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+                    std::wstring name = data.cFileName;
+                    std::wstring lower = name;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), [](wchar_t ch) {
+                        return static_cast<wchar_t>(towlower(ch));
+                    });
+                    if (lower.find(config.keyword) != std::wstring::npos ||
+                        lower.find(L"stockfish") != std::wstring::npos) {
+                        FindClose(find);
+                        return EngineExecutable{directory + L"\\" + name, root};
+                    }
+                }
+            } while (FindNextFileW(find, &data));
+            FindClose(find);
+        }
     }
 
-    return {};
+    return std::nullopt;
 }
 
 struct EngineResult {
@@ -673,8 +679,8 @@ struct AiResult {
 };
 
 EngineResult QueryEngineMove(EngineKind engineKind, const std::vector<Move>& history) {
-    const std::wstring enginePath = FindEngineExecutable(engineKind);
-    if (enginePath.empty()) {
+    const std::optional<EngineExecutable> engine = FindEngineExecutable(engineKind);
+    if (!engine) {
         return {};
     }
 
@@ -702,10 +708,10 @@ EngineResult QueryEngineMove(EngineKind engineKind, const std::vector<Move>& his
     startup.hStdError = childStdOutWrite;
 
     PROCESS_INFORMATION process{};
-    std::wstring commandLine = L"\"" + enginePath + L"\"";
-    const std::wstring engineWorkingDirectory = GetParentDirectory(GetParentDirectory(enginePath));
+    std::wstring commandLine = L"\"" + engine->exePath + L"\"";
     const BOOL created = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE,
-                                        CREATE_NO_WINDOW, nullptr, engineWorkingDirectory.c_str(),
+                                        CREATE_NO_WINDOW, nullptr,
+                                        engine->workingDirectory.c_str(),
                                         &startup, &process);
     CloseHandle(childStdInRead);
     CloseHandle(childStdOutWrite);
