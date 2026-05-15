@@ -1,0 +1,11 @@
+build/
+engines/
+*.obj
+*.pdb
+*.ilk
+*.user
+*.log
+engine_in.txt
+engine_out.txt
+.vs/
+.vscode/
