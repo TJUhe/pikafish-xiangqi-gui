@@ -94,13 +94,23 @@ std::vector<Move> g_gameMoves;
 bool g_engineAvailable = false;
 
 enum class EngineKind {
-    Pikafish = 0,
-    FairyStockfish = 1,
-    FairyStockfishNnue = 2
+    BuiltIn = 0,
+    Pikafish = 1,
+    FairyStockfish = 2,
+    ElephantEye = 3,
+    ElephantArt = 4,
+    Px0 = 5
+};
+
+enum class EngineProtocol {
+    BuiltIn,
+    Uci,
+    Ucci
 };
 
 struct EngineConfig {
     EngineKind kind;
+    EngineProtocol protocol;
     const wchar_t* displayName;
     const wchar_t* directoryName;
     const wchar_t* keyword;
@@ -112,10 +122,13 @@ struct EngineExecutable {
     std::wstring workingDirectory;
 };
 
-constexpr std::array<EngineConfig, 3> kEngines{{
-    {EngineKind::Pikafish, L"Pikafish", L"pikafish", L"pikafish", L"pikafish.nnue"},
-    {EngineKind::FairyStockfish, L"Fairy-Stockfish", L"fairy-stockfish", L"fairy", L""},
-    {EngineKind::FairyStockfishNnue, L"Fairy-Stockfish-NNUE", L"fairy-stockfish-nnue", L"fairy", L""},
+constexpr std::array<EngineConfig, 6> kEngines{{
+    {EngineKind::BuiltIn, EngineProtocol::BuiltIn, L"本机内置", L"", L"", L""},
+    {EngineKind::Pikafish, EngineProtocol::Uci, L"Pikafish", L"pikafish", L"pikafish", L"pikafish.nnue"},
+    {EngineKind::FairyStockfish, EngineProtocol::Uci, L"Fairy-Stockfish", L"fairy-stockfish", L"fairy", L""},
+    {EngineKind::ElephantEye, EngineProtocol::Ucci, L"ElephantEye", L"eleeye", L"eleeye", L""},
+    {EngineKind::ElephantArt, EngineProtocol::Ucci, L"ElephantArt", L"elephantart", L"elephant", L""},
+    {EngineKind::Px0, EngineProtocol::Uci, L"PX0", L"px0", L"px0", L""},
 }};
 
 EngineKind g_selectedEngine = EngineKind::Pikafish;
@@ -123,7 +136,12 @@ EngineKind g_selectedEngine = EngineKind::Pikafish;
 bool CrossedRiver(Position p, Side side);
 
 const EngineConfig& ConfigFor(EngineKind kind) {
-    return kEngines[static_cast<std::size_t>(kind)];
+    for (const EngineConfig& engine : kEngines) {
+        if (engine.kind == kind) {
+            return engine;
+        }
+    }
+    return kEngines.front();
 }
 
 std::wstring EngineDisplayName(EngineKind kind) {
@@ -603,6 +621,10 @@ std::string MoveToUci(const Move& move) {
     return text;
 }
 
+std::string MoveToUcci(const Move& move) {
+    return MoveToUci(move);
+}
+
 std::optional<Move> MoveFromUci(const std::string& text) {
     if (text.size() < 4) {
         return std::nullopt;
@@ -619,8 +641,15 @@ std::optional<Move> MoveFromUci(const std::string& text) {
     return move;
 }
 
+std::optional<Move> MoveFromEngineText(const std::string& text) {
+    return MoveFromUci(text);
+}
+
 std::optional<EngineExecutable> FindEngineExecutable(EngineKind engineKind) {
     const EngineConfig& config = ConfigFor(engineKind);
+    if (config.protocol == EngineProtocol::BuiltIn) {
+        return std::nullopt;
+    }
     const std::wstring engineDir = config.directoryName;
     const std::vector<std::wstring> roots{
         L".\\engines\\" + engineDir,
@@ -639,6 +668,9 @@ std::optional<EngineExecutable> FindEngineExecutable(EngineKind engineKind) {
             std::wstring(config.keyword) + L"-modern.exe",
             L"stockfish.exe",
             L"fairy-stockfish.exe",
+            L"eleeye.exe",
+            L"elephantart.exe",
+            L"px0.exe",
         };
 
         for (const std::wstring& directory : directories) {
@@ -688,6 +720,11 @@ struct AiResult {
 };
 
 EngineResult QueryEngineMove(EngineKind engineKind, const std::vector<Move>& history) {
+    const EngineConfig& config = ConfigFor(engineKind);
+    if (config.protocol == EngineProtocol::BuiltIn) {
+        return {};
+    }
+
     const std::optional<EngineExecutable> engine = FindEngineExecutable(engineKind);
     if (!engine) {
         return {};
@@ -731,25 +768,37 @@ EngineResult QueryEngineMove(EngineKind engineKind, const std::vector<Move>& his
     }
 
     std::ostringstream commands;
-    commands << "uci\n";
-    const EngineConfig& config = ConfigFor(engineKind);
-    if (engineKind == EngineKind::FairyStockfish ||
-        engineKind == EngineKind::FairyStockfishNnue) {
-        commands << "setoption name UCI_Variant value xiangqi\n";
-    }
-    if (config.evalFile[0] != L'\0') {
-        commands << "setoption name EvalFile value " << WideToUtf8(config.evalFile) << "\n";
-    }
-    commands << "isready\n";
-    commands << "position startpos";
-    if (!history.empty()) {
-        commands << " moves";
-        for (const Move& move : history) {
-            commands << ' ' << MoveToUci(move);
+    if (config.protocol == EngineProtocol::Uci) {
+        commands << "uci\n";
+        if (engineKind == EngineKind::FairyStockfish) {
+            commands << "setoption name UCI_Variant value xiangqi\n";
         }
+        if (config.evalFile[0] != L'\0') {
+            commands << "setoption name EvalFile value " << WideToUtf8(config.evalFile) << "\n";
+        }
+        commands << "isready\n";
+        commands << "position startpos";
+        if (!history.empty()) {
+            commands << " moves";
+            for (const Move& move : history) {
+                commands << ' ' << MoveToUci(move);
+            }
+        }
+        commands << "\n";
+        commands << "go movetime " << kEngineThinkTimeMs << "\n";
+    } else {
+        commands << "ucci\n";
+        commands << "isready\n";
+        commands << "position startpos";
+        if (!history.empty()) {
+            commands << " moves";
+            for (const Move& move : history) {
+                commands << ' ' << MoveToUcci(move);
+            }
+        }
+        commands << "\n";
+        commands << "go time " << kEngineThinkTimeMs << "\n";
     }
-    commands << "\n";
-    commands << "go movetime " << kEngineThinkTimeMs << "\n";
 
     const std::string input = commands.str();
     DWORD written = 0;
@@ -796,7 +845,7 @@ EngineResult QueryEngineMove(EngineKind engineKind, const std::vector<Move>& his
     }
 
     const std::string best = output.substr(pos + 9, 4);
-    return {MoveFromUci(best), true};
+    return {MoveFromEngineText(best), true};
 }
 
 int AlphaBeta(Board& board, int depth, int alpha, int beta, Side sideToMove) {
@@ -930,6 +979,7 @@ std::optional<Move> ChooseFallbackMoveForSide(Board& board, Side side) {
 
 AiResult ComputeEngineMoveForSide(Board board, std::vector<Move> history, EngineKind engineKind,
                                   Side side) {
+    const EngineConfig& config = ConfigFor(engineKind);
     EngineResult engineResult = QueryEngineMove(engineKind, history);
     std::optional<Move> move = engineResult.move;
     if (move && !IsLegalMove(board, *move, side)) {
@@ -938,7 +988,7 @@ AiResult ComputeEngineMoveForSide(Board board, std::vector<Move> history, Engine
     if (!move) {
         move = ChooseFallbackMoveForSide(board, side);
     }
-    return {move, engineResult.engineFound, engineKind};
+    return {move, config.protocol == EngineProtocol::BuiltIn || engineResult.engineFound, engineKind};
 }
 
 AiResult ComputeAiMove(Board board, std::vector<Move> history, EngineKind engineKind) {

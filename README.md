@@ -37,7 +37,7 @@ dist\pikafish-xiangqi-gui-windows-x64.zip
 发布包会包含：
 
 - `xiangqi.exe`
-- 三个外部引擎的 Windows 可执行文件
+- 已安装外部引擎的 Windows 可执行文件
 - Pikafish 所需的 `pikafish.nnue`
 - Fairy-Stockfish 所需的 `variants.ini`
 - README 和诊断脚本
@@ -48,7 +48,7 @@ dist\pikafish-xiangqi-gui-windows-x64.zip
 .\check_engines.ps1
 ```
 
-如果三个引擎都输出 `bestmove`，说明这台电脑可以直接运行。
+如果已安装的外部引擎都输出 `bestmove`，说明这台电脑可以直接运行。
 
 ## 运行
 
@@ -75,11 +75,14 @@ dist\pikafish-xiangqi-gui-windows-x64.zip
 
 程序支持在界面右上角选择电脑引擎。每一步电脑思考前都会读取当前下拉框选择，因此一局中途也可以切换引擎，下一步立即生效。
 
-目前内置三个引擎选项：
+目前内置这些引擎选项：
 
+- 本机内置
 - Pikafish
 - Fairy-Stockfish
-- Fairy-Stockfish-NNUE
+- ElephantEye
+- ElephantArt
+- PX0
 
 安装方式：
 
@@ -92,12 +95,14 @@ dist\pikafish-xiangqi-gui-windows-x64.zip
 ```text
 pikafish-xiangqi-gui\engines\pikafish
 pikafish-xiangqi-gui\engines\fairy-stockfish
-pikafish-xiangqi-gui\engines\fairy-stockfish-nnue
+pikafish-xiangqi-gui\engines\eleeye
+pikafish-xiangqi-gui\engines\elephantart
+pikafish-xiangqi-gui\engines\px0
 ```
 
 程序会自动查找这些目录或其 `Windows` 子目录里的 `.exe`。
 
-如果当前下拉框选中的引擎没有找到，程序会退回内置 alpha-beta 搜索，但棋力会明显弱很多。
+`本机内置` 不需要外部文件。其他引擎如果没有找到，程序会退回内置 alpha-beta 搜索，但棋力会明显弱很多。
 
 当前外部引擎每步思考时间默认是 `500ms`，并在后台线程运行，所以电脑思考时窗口不会卡住。可以在 `src/main.cpp` 里修改 `kEngineThinkTimeMs` 调整棋力和等待时间。
 

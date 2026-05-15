@@ -34,9 +34,15 @@ if(EXISTS "${ENGINE_SOURCE_DIR}")
                 PATTERN "*.exe"
                 PATTERN "variants.ini")
     endif()
-    if(EXISTS "${ENGINE_SOURCE_DIR}/fairy-stockfish-nnue")
-        install(DIRECTORY "${ENGINE_SOURCE_DIR}/fairy-stockfish-nnue/"
-                DESTINATION engines/fairy-stockfish-nnue
-                FILES_MATCHING PATTERN "*.exe")
-    endif()
+    foreach(ENGINE_DIR eleeye elephantart px0)
+        if(EXISTS "${ENGINE_SOURCE_DIR}/${ENGINE_DIR}")
+            install(DIRECTORY "${ENGINE_SOURCE_DIR}/${ENGINE_DIR}/"
+                    DESTINATION engines/${ENGINE_DIR}
+                    FILES_MATCHING
+                    PATTERN "*.exe"
+                    PATTERN "*.dll"
+                    PATTERN "*.ini"
+                    PATTERN "*.nnue")
+        endif()
+    endforeach()
 endif()
